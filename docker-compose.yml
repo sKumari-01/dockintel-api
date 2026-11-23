@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dockintel
+      POSTGRES_PASSWORD: dockintel
+      POSTGRES_DB: dockintel
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dockintel -d dockintel"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://dockintel:dockintel@postgres:5432/dockintel
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /app/storage
+      CELERY_EAGER: "false"
+    volumes:
+      - document_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    build: .
+    command: celery -A app.celery_app.celery worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg://dockintel:dockintel@postgres:5432/dockintel
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /app/storage
+      CELERY_EAGER: "false"
+    volumes:
+      - document_storage:/app/storage
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  document_storage:
